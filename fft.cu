@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <math.h>
+#include <string>
 #include <cuda.h>
 
 #define NUM_THREADS 256
@@ -10,47 +11,64 @@
 __global__ void fourier(int *buffer, int *result, int size){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < size){
-        int sum = 0;
+        float real = 0;
+        float imag = 0;
         for(int j = 0; j < size; j++){
-            sum += buffer[j] * cos(2 * M_PI * i * j / size);
+            float angle = 2 * M_PI * i * j / size;
+            real += buffer[j] * cos(angle);
+            imag -= buffer[j] * sin(angle);
         }
-        result[i] = sum;
+        result[i] = sqrt(real * real + imag * imag);
     }
 }
 
-int main(){
-    //gliss.ascii is a file containing the ascii representation of a song
-    FILE *fp = fopen("gliss.ascii", "r");
+void wav_to_ascii_file(std::string wav_file, std::string ascii_file){
+    //convert audio.wav to a raw file
+    FILE *ip = popen(("sox " + wav_file + " -t raw -r 44100 -e float -b 32 -c 1 " + ascii_file).c_str(), "r");
+    pclose(ip);
+}
 
-    //read the file into a buffer
-    fseek(fp, 0, SEEK_END);
+void ascii_file_to_wav(std::string ascii_file, std::string wav_file){
+    //write the buffer to a wav file
+    FILE *dp = popen(("sox -t raw -r 44100 -e float -b 32 -c 1 " + ascii_file + " " + wav_file).c_str(), "w");
+    pclose(dp);
+}
 
-    int size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    char *buffer = (char*)malloc(size);
-    fread(buffer, 1, size, fp);
-    fclose(fp);
-
-    //perform a fourier transform on the buffer using CUDA
-    int numBlocks = (size + NUM_THREADS - 1) / NUM_THREADS;
-    int *d_buffer, *d_result;
-    cudaMalloc((void**)&d_buffer, size);
-    cudaMalloc((void**)&d_result, size);
-    cudaMemcpy(d_buffer, buffer, size, cudaMemcpyHostToDevice);
+int* ascii_file_to_buffer(std::string ascii_file){
+    //read the raw file into a buffer
+    FILE *dp = fopen(ascii_file.c_str(), "r");
+    fseek(dp, 0, SEEK_END);
     
-    //perform the fourier transform
-    fourier<<<numBlocks, NUM_THREADS>>>(d_buffer, d_result, size);
-    cudaMemcpy(buffer, d_result, size, cudaMemcpyDeviceToHost);
+    int size = ftell(dp);
+    fseek(dp, 0, SEEK_SET);
 
-    //write the result to a file
-    fp = fopen("gliss.fft", "w");
-    fwrite(buffer, 1, size, fp);
-    fclose(fp);
+    int *dbuffer = (int*)malloc(size);
+    fread(dbuffer, 1, size, dp);
+    fclose(dp);
+    return dbuffer;
+}
 
-    //free the memory
-    cudaFree(d_buffer);
-    cudaFree(d_result);
-    free(buffer);
+void buffer_to_ascii_file(int *buffer, int size, std::string ascii_file){
+    //write the buffer to an ascii file
+    FILE *dp = fopen(ascii_file.c_str(), "w");
+    fwrite(buffer, 1, size, dp);
+    fclose(dp);
+}
+
+int main(){
+    //convert audio.wav to a raw file
+    wav_to_ascii_file("audio.wav", "audio.ascii");
+
+    //read the raw file into a buffer
+    int *dbuffer = ascii_file_to_buffer("audio.ascii");
+
+    //perform a fourier transform on the buffer
+    int *dresult;
+    cudaMalloc(&dresult, 44100 * 25 * sizeof(int));
+    //write the buffer to an ascii file
+    buffer_to_ascii_file(dresult, 44100, "audio_result.ascii");
+
+    //write the buffer to a wav file
+    ascii_file_to_wav("audio_result.ascii", "audio_result.wav");
     return 0;
 }
